@@ -1,5 +1,5 @@
 # pages/1_Ocorrências_Detalhadas.py
-# AJUSTADO – VP / DIRETORIA VIA COLA + ORGA
+# AJUSTADO – VP / DIRETORIA VIA RAW GITHUB
 
 import streamlit as st
 import pandas as pd
@@ -7,7 +7,6 @@ import plotly.express as px
 import numpy as np
 import requests
 import io
-import os
 
 # =====================================================
 # CONFIGURAÇÕES
@@ -17,97 +16,109 @@ st.set_page_config(layout="wide", page_title="Dashboard Profarma - Ocorrências"
 COR_PRINCIPAL_VERDE = "#70C247"
 COR_CONTRASTE = "#4CAF50"
 
-REPO_URL_BASE = "https://raw.githubusercontent.com/oliveirafabio8813-design/meu-dashboard-profarma/main/Dashboard/"
+REPO_URL_BASE = (
+    "https://raw.githubusercontent.com/"
+    "oliveirafabio8813-design/meu-dashboard-profarma/main/Dashboard/"
+)
 
 URL_OCORRENCIAS = REPO_URL_BASE + "Relatorio_OcorrenciasNoPonto.xlsx"
 SHEET_OCORRENCIAS = "OcorrênciasnoPonto"
 
-URL_BANCO_HORAS_RESUMO = REPO_URL_BASE + "Relatorio_ContaCorrenteBancoDeHorasResumo.xlsx"
+URL_BANCO_HORAS = REPO_URL_BASE + "Relatorio_ContaCorrenteBancoDeHorasResumo.xlsx"
 SHEET_BANCO_HORAS = "ContaCorrenteBancodeHorasResum"
 
-FILE_COLA = "COLA_Colaboradores_CSV_Gestor.CSV"
-FILE_ORGA = "ORGA_Diretoria e VP por Unidade Organizacional.CSV"
+URL_ORGA = (
+    "https://raw.githubusercontent.com/"
+    "oliveirafabio8813-design/Farol-Sede-Profarma/main/"
+    "ORGA_Diretoria%20e%20VP%20por%20Unidade%20Organizacional.CSV"
+)
 
 # =====================================================
-# FUNÇÕES
+# FUNÇÕES DE CARGA
 # =====================================================
 @st.cache_data(show_spinner="Carregando dados do GitHub...")
-def load_excel_github(url, sheet):
+def load_excel(url, sheet):
     r = requests.get(url, timeout=30)
     r.raise_for_status()
     return pd.read_excel(io.BytesIO(r.content), sheet_name=sheet)
 
-@st.cache_data(show_spinner="Carregando base de colaboradores...")
-def load_cola():
-    if not os.path.exists(FILE_COLA):
-        st.error(f"Arquivo {FILE_COLA} não encontrado no repositório.")
-        st.stop()
-    return pd.read_csv(FILE_COLA, sep=";", encoding="utf-8", low_memory=False)
-
-@st.cache_data(show_spinner="Carregando estrutura organizacional...")
+@st.cache_data(show_spinner="Carregando estrutura organizacional (VP/Diretoria)...")
 def load_orga():
-    if not os.path.exists(FILE_ORGA):
-        st.error(f"Arquivo {FILE_ORGA} não encontrado no repositório.")
-        st.stop()
-    return pd.read_csv(FILE_ORGA, sep=";", encoding="utf-8")
+    return pd.read_csv(URL_ORGA, sep=";", encoding="utf-8")
 
 def e_marcacoes_impar(marc):
     if pd.isna(marc):
         return False
     return len(str(marc).split()) % 2 != 0
 
+def convert_to_hours(time_str):
+    if pd.isna(time_str) or time_str == "00:00":
+        return 0.0
+    try:
+        neg = str(time_str).startswith("-")
+        if neg:
+            time_str = str(time_str)[1:]
+        h, m = map(int, str(time_str).split(":"))
+        total = h + m / 60
+        return -total if neg else total
+    except:
+        return 0.0
+
 # =====================================================
 # CARGA DAS BASES
 # =====================================================
-df_ocorrencias = load_excel_github(URL_OCORRENCIAS, SHEET_OCORRENCIAS)
-df_banco_horas = load_excel_github(URL_BANCO_HORAS_RESUMO, SHEET_BANCO_HORAS)
-df_cola = load_cola()
+df_ocorr = load_excel(URL_OCORRENCIAS, SHEET_OCORRENCIAS)
+df_banco = load_excel(URL_BANCO_HORAS, SHEET_BANCO_HORAS)
 df_orga = load_orga()
 
 # =====================================================
-# TRATAMENTOS
+# TRATAMENTOS INICIAIS
 # =====================================================
-df_ocorrencias["Data"] = pd.to_datetime(df_ocorrencias["Data"], errors="coerce", dayfirst=True)
-df_ocorrencias["is_impar"] = df_ocorrencias["Marcacoes"].apply(e_marcacoes_impar)
-df_ocorrencias["is_sem_marcacao"] = df_ocorrencias["Ocorrencia"].isin(
+df_ocorr["Data"] = pd.to_datetime(df_ocorr["Data"], errors="coerce", dayfirst=True)
+df_ocorr["is_impar"] = df_ocorr["Marcacoes"].apply(e_marcacoes_impar)
+df_ocorr["is_sem_marcacao"] = df_ocorr["Ocorrencia"].isin(
     ["Sem marcação de entrada", "Sem marcação de saída"]
 )
 
-# Padronização de chaves
-df_ocorrencias["Matricula"] = df_ocorrencias["Matricula"].astype(str).str.strip()
-df_cola["Matrícula"] = df_cola["Matrícula"].astype(str).str.strip()
+df_banco["SaldoFinal_Horas"] = df_banco["SaldoFinal"].apply(convert_to_hours)
 
-df_cola["Código da Unidade Organizacional"] = (
-    df_cola["Código da Unidade Organizacional"].astype(str).str.strip()
+# =====================================================
+# PADRONIZAÇÃO DE CHAVES
+# =====================================================
+df_ocorr["Matricula"] = df_ocorr["Matricula"].astype(str).str.strip()
+df_banco["Matricula"] = df_banco["Matricula"].astype(str).str.strip()
+
+df_banco["COD_UNIDADE"] = (
+    df_banco["Código Unidade Organizacional"]
+    .astype(str)
+    .str.strip()
 )
+
 df_orga["COD UNIDADE ORGANIZACIONAL"] = (
-    df_orga["COD UNIDADE ORGANIZACIONAL"].astype(str).str.strip()
+    df_orga["COD UNIDADE ORGANIZACIONAL"]
+    .astype(str)
+    .str.strip()
 )
 
 # =====================================================
-# MERGE 1 – COLA + ORGA
+# MERGE – BANCO + ORGA (VP / DIRETORIA)
 # =====================================================
-df_cola_org = df_cola.merge(
+df_banco_org = df_banco.merge(
     df_orga[["COD UNIDADE ORGANIZACIONAL", "VP", "DIRETORIA"]],
-    left_on="Código da Unidade Organizacional",
+    left_on="COD_UNIDADE",
     right_on="COD UNIDADE ORGANIZACIONAL",
     how="left"
 )
 
 # =====================================================
-# MERGE 2 – OCORRÊNCIAS + COLA_ORG
+# MERGE – OCORRÊNCIAS + BANCO_ORG
 # =====================================================
-df_ocorrencias = df_ocorrencias.merge(
-    df_cola_org[
-        ["Matrícula", "Estabelecimento", "Unidade Organizacional", "VP", "DIRETORIA"]
+df = df_ocorr.merge(
+    df_banco_org[
+        ["Matricula", "Estabelecimento", "Departamento", "VP", "DIRETORIA"]
     ],
-    left_on="Matricula",
-    right_on="Matrícula",
+    on="Matricula",
     how="left"
-)
-
-df_ocorrencias.rename(
-    columns={"Unidade Organizacional": "Departamento"}, inplace=True
 )
 
 # =====================================================
@@ -115,7 +126,7 @@ df_ocorrencias.rename(
 # =====================================================
 st.markdown(
     f"<h1 style='color:{COR_PRINCIPAL_VERDE}'>Dashboard Profarma - Ocorrências</h1>",
-    unsafe_allow_html=True,
+    unsafe_allow_html=True
 )
 st.markdown("Relatório e Detalhamento de Ocorrências no Ponto")
 st.markdown("---")
@@ -140,36 +151,36 @@ with col_btn:
 
 # VP
 with col_vp:
-    vps = sorted(df_ocorrencias["VP"].dropna().unique())
+    vps = sorted(df["VP"].dropna().unique())
     st.session_state.vp = st.multiselect("VP:", vps, st.session_state.vp)
 
-df_filtro = df_ocorrencias.copy()
+df_f = df.copy()
 if st.session_state.vp:
-    df_filtro = df_filtro[df_filtro["VP"].isin(st.session_state.vp)]
+    df_f = df_f[df_f["VP"].isin(st.session_state.vp)]
 
 # Diretoria
 with col_dir:
-    dirs = sorted(df_filtro["DIRETORIA"].dropna().unique())
+    dirs = sorted(df_f["DIRETORIA"].dropna().unique())
     st.session_state.dir = st.multiselect("Diretoria:", dirs, st.session_state.dir)
 
 if st.session_state.dir:
-    df_filtro = df_filtro[df_filtro["DIRETORIA"].isin(st.session_state.dir)]
+    df_f = df_f[df_f["DIRETORIA"].isin(st.session_state.dir)]
 
 # Estabelecimento
 with col_est:
-    ests = sorted(df_filtro["Estabelecimento"].dropna().unique())
+    ests = sorted(df_f["Estabelecimento"].dropna().unique())
     st.session_state.est = st.multiselect("Estabelecimento:", ests, st.session_state.est)
 
 if st.session_state.est:
-    df_filtro = df_filtro[df_filtro["Estabelecimento"].isin(st.session_state.est)]
+    df_f = df_f[df_f["Estabelecimento"].isin(st.session_state.est)]
 
 # Departamento
 with col_dep:
-    deps = sorted(df_filtro["Departamento"].dropna().unique())
+    deps = sorted(df_f["Departamento"].dropna().unique())
     st.session_state.dep = st.multiselect("Departamento:", deps, st.session_state.dep)
 
 if st.session_state.dep:
-    df_filtro = df_filtro[df_filtro["Departamento"].isin(st.session_state.dep)]
+    df_f = df_f[df_f["Departamento"].isin(st.session_state.dep)]
 
 # =====================================================
 # KPIs
@@ -177,18 +188,16 @@ if st.session_state.dep:
 st.markdown("---")
 st.subheader("Resumo das Ocorrências (Filtros Aplicados)")
 
-df_filtro["is_falta_nao_justificada"] = (
-    (df_filtro["Ocorrencia"] == "Falta") &
-    (df_filtro["Justificativa"] == "Falta")
+df_f["is_falta"] = (
+    (df_f["Ocorrencia"] == "Falta") &
+    (df_f["Justificativa"] == "Falta")
 ).astype(int)
 
 col1, col2 = st.columns(2)
-
 with col1:
-    st.metric("Faltas Não Justificadas", int(df_filtro["is_falta_nao_justificada"].sum()))
-
+    st.metric("Faltas Não Justificadas", int(df_f["is_falta"].sum()))
 with col2:
     st.metric(
         "Marcações Ímpares / Ausentes",
-        int(df_filtro["is_impar"].sum() + df_filtro["is_sem_marcacao"].sum())
+        int(df_f["is_impar"].sum() + df_f["is_sem_marcacao"].sum())
     )
